@@ -35,20 +35,22 @@
   // you want permission events etc. included.
   "notifyOn": ["session.*"],
 
-  // Events that need a human blink; ones with nothing to do stay steady.
-  // `timeout` (ms) controls how long the dot stays before the device drops it
-  // on its own; omitted states fall through to "session.*" below.
+  // Busy / retrying / starting states must NOT disappear on a long timeout, so
+  // they use `timeout: 0` = resident until a new request overwrites or removes
+  // the dot. Only `session.idle` (waiting for input) uses a finite `timeout`
+  // (600000ms = 10 minutes) so the device clears idle dots on its own. Omitted
+  // states fall through to the "session.*" default below.
   "events": {
-    "session.execution.started":   { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 600000 } },
-    "session.step.started":        { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 600000 } },
-    "session.execution.succeeded": { "body": { "app_id": "{sessionKey}", "color": "green", "timeout": 600000 } },
-    "session.retry.scheduled":     { "body": { "app_id": "{sessionKey}", "color": "amber", "blink_hz": 4, "timeout": 600000 } },
-    "session.error":               { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 600000 } },
-    "session.execution.failed":    { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 600000 } },
+    "session.execution.started":   { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 0 } },
+    "session.step.started":        { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 0 } },
+    "session.execution.succeeded": { "body": { "app_id": "{sessionKey}", "color": "green", "timeout": 0 } },
+    "session.retry.scheduled":     { "body": { "app_id": "{sessionKey}", "color": "amber", "blink_hz": 4, "timeout": 0 } },
+    "session.error":               { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 0 } },
+    "session.execution.failed":    { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 0 } },
     "session.idle":                { "body": { "app_id": "{sessionKey}", "color": "green", "blink_hz": 2, "timeout": 600000 } },
-    "session.created":             { "body": { "app_id": "{sessionKey}", "color": "cyan", "timeout": 600000 } },
+    "session.created":             { "body": { "app_id": "{sessionKey}", "color": "cyan", "timeout": 0 } },
 
-    // Catch-all default for any other session.* event: steady white dot.
-    "session.*":                   { "body": { "app_id": "{sessionKey}", "color": "white", "timeout": 600000 } }
+    // Catch-all default for any other session.* event: steady white, resident.
+    "session.*":                   { "body": { "app_id": "{sessionKey}", "color": "white", "timeout": 0 } }
   }
 }
