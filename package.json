@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "opencode-http-notifier",
+  "version": "1.0.0",
+  "description": "Notify a remote HTTP endpoint about OpenCode status changes. Works with OpenCode V1 and V2 plugin APIs.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.mjs",
+  "module": "./index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "notifications",
+    "webhook",
+    "http"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --test test/notifier.test.ts",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.32",
+    "@opencode-ai/plugin": "1.19.3",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

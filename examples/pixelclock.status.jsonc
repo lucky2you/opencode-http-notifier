@@ -1,0 +1,73 @@
+// opencode-http-notifier → PixelClock status-dot example.
+//
+// Each OpenCode session becomes one status dot on the device, keyed by a stable
+// short hash of its real session ID (`{sessionKey}`), so the dot for a session
+// stays the same across that session's life and moves rows freely as sessions
+// come and go.
+//
+// Mapping to the PixelClock API (see the device /api doc):
+//   POST http://192.168.0.91:8081/status  {"app_id","active","color","blink_hz","timeout"}
+//
+// Paste the `options` object below into your opencode config:
+// {
+//   "plugins": [{
+//     "package": "opencode-http-notifier",
+//     "options": { ... }
+//   }]
+// }
+{
+  "url": "http://192.168.0.91:8081/status",
+  "payload": "custom",
+  "emitRepeatedStates": false,
+  "debounceMs": 300,
+  "throttleMs": 800,
+  "retries": 2,
+  "timeoutMs": 2000,
+  "successStatus": 300,
+
+  // Only the four lifecycle states below are shown as dots. `session.created`
+  // and the permission events are intentionally excluded so the device is only
+  // touched by the states you see in the mapping.
+  "notifyOn": ["session.busy", "session.retry", "session.error", "session.idle"],
+
+  // When a session goes idle, keep a green dot that the device drops on its
+  // own after `timeout` (600000ms = 10 minutes), so you still see recently
+  // finished sessions without the 7-dot device filling up forever.
+  "events": {
+    "session.busy": {
+      "body": {
+        "app_id": "{sessionKey}",
+        "active": true,
+        "color": "amber",
+        "blink_hz": 2,
+        "timeout": 600000
+      }
+    },
+    "session.retry": {
+      "body": {
+        "app_id": "{sessionKey}",
+        "active": true,
+        "color": "amber",
+        "blink_hz": 4,
+        "timeout": 600000
+      }
+    },
+    "session.error": {
+      "body": {
+        "app_id": "{sessionKey}",
+        "active": true,
+        "color": "red",
+        "blink_hz": 1,
+        "timeout": 600000
+      }
+    },
+    "session.idle": {
+      "body": {
+        "app_id": "{sessionKey}",
+        "active": true,
+        "color": "green",
+        "timeout": 600000
+      }
+    }
+  }
+}
