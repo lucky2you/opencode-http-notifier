@@ -10,10 +10,10 @@
 import type { NotifyEvent, RawEventEnvelope, SessionState } from "./config.js"
 
 export interface NormalizedEvent {
-  /** OpenCode event name, e.g. `session.idle`. */
+  /** OpenCode raw provider event name, e.g. `session.idle`. */
   type: string
-  /** Notifier-level event used for filtering and routing. */
-  event: NotifyEvent
+  /** The concrete event type used for filtering and routing (same as `type`). */
+  event: string
   sessionID?: string
   sessionTitle?: string
   state?: SessionState
@@ -127,13 +127,40 @@ export const normalizeEvent = (
     apiVersion: context.apiVersion,
   }
 
+  // `event` keeps the raw provider event type so every event is individually
+  // matchable (and config can style "task finished" separately from "waiting
+  // for input"). `state` is only a derived hint used by the HTTP verb/status
+  // machine and the `sessionState` payload field — routing/colour is by `event`.
+  const stateOf = (): SessionState | undefined => {
+    if (type === "session.status") return toState(body.status)
+    switch (type) {
+      case "session.idle":
+      case "session.created":
+      case "session.execution.succeeded":
+        return "idle"
+      case "session.execution.started":
+      case "session.step.started":
+        return "busy"
+      case "session.execution.failed":
+      case "session.error":
+        return "error"
+      case "session.retry.scheduled":
+        return "retry"
+      case "permission.asked":
+      case "permission.updated":
+        return "busy"
+      default:
+        return undefined
+    }
+  }
+
   // Only surface events that carry meaning for a remote observer.
   if (type === "session.status") {
     const state = toState(body.status)
     if (!state) return undefined
     return {
       ...base,
-      event: `session.${state}` as NotifyEvent,
+      event: type,
       state,
       ...(state === "retry" ? { message: asString(body.status && asDict(body.status)?.message) } : {}),
     }
@@ -141,27 +168,28 @@ export const normalizeEvent = (
 
   switch (type) {
     case "session.idle":
-      return { ...base, event: "session.idle", state: "idle" }
+      return { ...base, event: type, state: "idle" }
     case "session.created":
-      return { ...base, event: "session.created", state: "idle" }
+      return { ...base, event: type, state: "idle" }
     case "session.compacted":
-      return { ...base, event: "session.compacted" }
+      return { ...base, event: type }
     case "session.error":
     case "session.execution.failed":
       return {
         ...base,
-        event: "session.error",
+        event: type,
         state: "error",
         message: errorMessage(errorDict) ?? asString(body.message),
       }
     case "session.execution.succeeded":
-      return { ...base, event: "session.idle", state: "idle" }
+      return { ...base, event: type, state: "idle" }
     case "session.execution.started":
-      return { ...base, event: "session.busy", state: "busy" }
+    case "session.step.started":
+      return { ...base, event: type, state: "busy" }
     case "session.retry.scheduled":
       return {
         ...base,
-        event: "session.retry",
+        event: type,
         state: "retry",
         message: asString(body.reason) ?? asString(body.message),
       }
@@ -169,14 +197,14 @@ export const normalizeEvent = (
     case "permission.updated":
       return {
         ...base,
-        event: "permission.asked",
+        event: type,
         state: "busy",
         message: asString(permission?.title) ?? asString(body.title),
       }
     case "permission.replied":
       return {
         ...base,
-        event: "permission.replied",
+        event: type,
         message: asString(body.response) ?? asString(body.reply),
       }
     default:

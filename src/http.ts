@@ -16,6 +16,7 @@ import type {
   ResolvedConfig,
   SessionState,
 } from "./config.js"
+import { eventBodiesFor, payloadFor } from "./config.js"
 import type { NormalizedEvent } from "./events.js"
 import type { Logger } from "./logger.js"
 
@@ -79,8 +80,8 @@ export const buildPayload = (
 }
 
 const customTemplate = (event: NormalizedEvent, config: ResolvedConfig): Record<string, unknown> | undefined => {
-  const fromEvent = config.eventBodies[event.event]
-  const fromPayloads = config.payloads[event.event]
+  const fromEvent = eventBodiesFor(config, event.event)
+  const fromPayloads = payloadFor(config, event.event)
   const root = fromEvent ?? config.body ?? fromPayloads
   return root
 }

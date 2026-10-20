@@ -2,8 +2,14 @@
 //
 // Each OpenCode session becomes one status dot on the device, keyed by a stable
 // short hash of its real session ID (`{sessionKey}`), so the dot for a session
-// stays the same across that session's life and moves rows freely as sessions
-// come and go.
+// stays the same across that session's life.
+//
+// No event normalization: every raw OpenCode event type keeps its own identity
+// and is matched individually. You use wildcard patterns (`session.*`) and a
+// catch-all (`*`) to keep the config short without enumerating every event.
+// The two "idle-looking" events the device cares about are now distinct:
+//   - `session.execution.succeeded`  task finished  -> steady
+//   - `session.idle`                 waiting for input -> blinks
 //
 // Mapping to the PixelClock API (see the device /api doc):
 //   POST http://192.168.0.91:8081/status  {"app_id","active","color","blink_hz","timeout"}
@@ -25,49 +31,24 @@
   "timeoutMs": 2000,
   "successStatus": 300,
 
-  // Only the four lifecycle states below are shown as dots. `session.created`
-  // and the permission events are intentionally excluded so the device is only
-  // touched by the states you see in the mapping.
-  "notifyOn": ["session.busy", "session.retry", "session.error", "session.idle"],
+  // Only session lifecycle events reach the device. Add more wildcards here if
+  // you want permission events etc. included.
+  "notifyOn": ["session.*"],
 
-  // When a session goes idle, keep a green dot that the device drops on its
-  // own after `timeout` (600000ms = 10 minutes), so you still see recently
-  // finished sessions without the 7-dot device filling up forever.
+  // Events that need a human blink; ones with nothing to do stay steady.
+  // `timeout` (ms) controls how long the dot stays before the device drops it
+  // on its own; omitted states fall through to "session.*" below.
   "events": {
-    "session.busy": {
-      "body": {
-        "app_id": "{sessionKey}",
-        "active": true,
-        "color": "amber",
-        "blink_hz": 2,
-        "timeout": 600000
-      }
-    },
-    "session.retry": {
-      "body": {
-        "app_id": "{sessionKey}",
-        "active": true,
-        "color": "amber",
-        "blink_hz": 4,
-        "timeout": 600000
-      }
-    },
-    "session.error": {
-      "body": {
-        "app_id": "{sessionKey}",
-        "active": true,
-        "color": "red",
-        "blink_hz": 1,
-        "timeout": 600000
-      }
-    },
-    "session.idle": {
-      "body": {
-        "app_id": "{sessionKey}",
-        "active": true,
-        "color": "green",
-        "timeout": 600000
-      }
-    }
+    "session.execution.started":   { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 600000 } },
+    "session.step.started":        { "body": { "app_id": "{sessionKey}", "color": "amber", "timeout": 600000 } },
+    "session.execution.succeeded": { "body": { "app_id": "{sessionKey}", "color": "green", "timeout": 600000 } },
+    "session.retry.scheduled":     { "body": { "app_id": "{sessionKey}", "color": "amber", "blink_hz": 4, "timeout": 600000 } },
+    "session.error":               { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 600000 } },
+    "session.execution.failed":    { "body": { "app_id": "{sessionKey}", "color": "red", "blink_hz": 1, "timeout": 600000 } },
+    "session.idle":                { "body": { "app_id": "{sessionKey}", "color": "green", "blink_hz": 2, "timeout": 600000 } },
+    "session.created":             { "body": { "app_id": "{sessionKey}", "color": "cyan", "timeout": 600000 } },
+
+    // Catch-all default for any other session.* event: steady white dot.
+    "session.*":                   { "body": { "app_id": "{sessionKey}", "color": "white", "timeout": 600000 } }
   }
 }

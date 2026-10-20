@@ -18,7 +18,7 @@ import { createNotifier, type Notifier } from "./notifier.js"
 import { resolveConfig } from "./config.js"
 
 export type { HttpMapping, HttpNotifierConfig, NotificationPayload, NotifyEvent, RequestOutcome, SessionState } from "./config.js"
-export { NOTIFY_EVENTS, resolveConfig } from "./config.js"
+export { NOTIFY_EVENTS, resolveConfig, globMatch, patternKey, parsePatterns, eventBodiesFor } from "./config.js"
 export type { NormalizedEvent } from "./events.js"
 export { shortKey } from "./http.js"
 export { Notifier, createNotifier } from "./notifier.js"

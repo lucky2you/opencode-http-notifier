@@ -7,7 +7,7 @@
  */
 
 import { adaptEvent } from "./compat.js"
-import { configForEvent, resolveConfig, type ResolvedConfig } from "./config.js"
+import { configForEvent, passesNotifyOn, resolveConfig, type ResolvedConfig } from "./config.js"
 import type { NormalizedEvent } from "./events.js"
 import { buildPayload, planRequest, sendRequest } from "./http.js"
 import type { Logger } from "./logger.js"
@@ -38,7 +38,7 @@ export class Notifier {
   private closed = false
   private readonly controller = new AbortController()
   private readonly lastSent = new Map<string, number>()
-  private readonly lastState = new Map<string, string>()
+  private readonly lastEventType = new Map<string, boolean>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
 
   constructor(context: NotifierContext) {
@@ -64,7 +64,7 @@ export class Notifier {
     }
     if (!event) return
 
-    if (!this.config.notifyOn.includes(event.event)) return
+    if (!passesNotifyOn(this.config.notifyOn, event.event)) return
     const eventConfig = configForEvent(this.config, event.event)
     if (eventConfig.enabled === false) return
 
@@ -88,18 +88,20 @@ export class Notifier {
     return Boolean(config.url ?? config.http.url ?? Object.values(urls).some(Boolean))
   }
 
-  /** Debounce duplicate events, drop repeated states and throttle sessions. */
+  /** Debounce duplicate events, drop repeated events and throttle sessions. */
   private shouldSend(event: NormalizedEvent, config: ResolvedConfig): boolean {
     const sessionKey = event.sessionID ?? "global"
-    // Debounce the reported status, not the raw event: `busy` may arrive from
-    // several underlying events (execution started, step started...).
-    const key = `${event.state ?? event.event}:${sessionKey}`
+    // Key on the raw event type so distinct events (e.g. "task finished" and
+    // "waiting for input") are never merged, even though they share a derived
+    // `state` hint. `busy` may still arrive via several underlying events
+    // (execution started, step started...), which the debounce collapses.
+    const key = `${event.event}:${sessionKey}`
     const now = Date.now()
 
-    // Only report state transitions when requested. Events without a state
+    // Only report repeated events when requested. Events without a session
     // (permissions, compaction) are always considered.
-    if (event.state && !config.emitRepeatedStates && this.lastState.get(sessionKey) === event.state) {
-      this.logger.debug(`skipped ${event.event}: state already ${event.state}`)
+    if (event.sessionID && !config.emitRepeatedStates && this.lastEventType.get(event.event)) {
+      this.logger.debug(`skipped ${event.event}: already seen`)
       return false
     }
 
@@ -112,7 +114,7 @@ export class Notifier {
       }
     }
     this.lastSent.set(key, now)
-    if (event.state) this.lastState.set(sessionKey, event.state)
+    if (event.sessionID) this.lastEventType.set(event.event, true)
 
     // Bound the bookkeeping map; sessions are short lived but can be numerous.
     if (this.lastSent.size > 1000) {

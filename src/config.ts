@@ -138,7 +138,12 @@ export interface HttpNotifierConfig {
    * Event names to notify. Defaults to every event except `session.compacted`.
    * A per-event `enabled: false` disables a single event.
    */
-  notifyOn?: NotifyEvent[]
+  /**
+   * Event glob patterns to notify. Each may be an exact event type (e.g.
+   * `session.idle`), a dotted-prefix wildcard (`session.*`), or the catch-all
+   * `*`. Defaults to every curated event except `session.compacted`.
+   */
+  notifyOn?: string[]
   /**
    * Debounce identical events for the same session, in milliseconds.
    * @default 500
@@ -197,8 +202,8 @@ export interface RawEventEnvelope {
 }
 
 export interface NotificationMeta {
-  /** Event name, e.g. `session.idle`. */
-  event: NotifyEvent
+  /** Event type (raw provider event name). */
+  event: string
   sessionID?: string
   sessionTitle?: string
   state?: SessionState
@@ -215,7 +220,7 @@ export interface NotificationMeta {
 }
 
 export interface RequestOutcome {
-  event: NotifyEvent
+  event: string
   sessionID?: string
   state?: SessionState
   url: string
@@ -228,7 +233,7 @@ export interface RequestOutcome {
 }
 
 export type NotificationPayload = {
-  type: NotifyEvent
+  type: string
   sessionState?: SessionState
   sessionID?: string
   sessionTitle?: string
@@ -266,7 +271,7 @@ const EVENT_ALIASES: Record<string, NotifyEvent> = {
   compacted: "session.compacted",
 }
 
-const DEFAULT_EVENTS: NotifyEvent[] = NOTIFY_EVENTS.filter((event) => event !== "session.compacted")
+const DEFAULT_EVENTS: string[] = ["session.*"]
 
 const string = (value: unknown): string | undefined => {
   if (typeof value === "string" && value.trim() !== "") return value
@@ -331,6 +336,124 @@ export const parseEvents = (value: unknown): NotifyEvent[] | undefined => {
   }
   return resolved
 }
+
+/**
+ * Parse a list of notify filters. Unlike {@link parseEvents} this also keeps
+ * wildcard patterns (`session.*`, `*`) so callers can match swaths of events.
+ */
+export const parsePatterns = (value: unknown): string[] | undefined => {
+  const list = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\s,]+/)
+      : undefined
+  if (!list) return undefined
+  const resolved: string[] = []
+  for (const entry of list) {
+    if (typeof entry !== "string") continue
+    const pattern = patternKey(entry)
+    if (pattern && !resolved.includes(pattern)) resolved.push(pattern)
+  }
+  return resolved.length > 0 ? resolved : undefined
+}
+
+/**
+ * Normalise a config key into a glob pattern for event matching. Returns the
+ * lowercased raw key (so wildcards like `*` and `session.*` pass through
+ * untouched), or a canonical alias when the key maps to a known event.
+ * `undefined` for malformed input.
+ */
+export const patternKey = (value: unknown): string | undefined => {
+  if (typeof value !== "string" || value.trim() === "") return undefined
+  const trimmed = value.trim()
+  const lower = trimmed.toLowerCase()
+  return EVENT_ALIASES[lower] ?? lower
+}
+
+/**
+ * Whether a glob pattern (exact event name, `session.*`, or `*`) matches a
+ * concrete event type. `*` matches every event; a trailing `.*` matches any
+ * event in that dotted prefix; an exact name matches only itself.
+ */
+export const globMatch = (pattern: string, event: string): boolean => {
+  if (pattern === "*") return true
+  if (pattern.endsWith(".*")) {
+    const prefix = pattern.slice(0, -2)
+    return event === prefix || event.startsWith(`${prefix}.`)
+  }
+  return pattern === event
+}
+
+/**
+ * Resolve the single most specific event override for a concrete event type
+ * from a map keyed by glob patterns. Precedence: exact name > narrower
+ * wildcard > catch-all `*`.
+ */
+export const matchKey = (
+  map: Record<string, unknown>,
+  event: string,
+): string | undefined => {
+  if (map[event] !== undefined) return event
+  // Most specific wildcard: longest matching dotted prefix first.
+  let best: string | undefined
+  let bestSegments = -1
+  for (const pattern of Object.keys(map)) {
+    if (pattern === "*") continue
+    if (!globMatch(pattern, event)) continue
+    const segments = pattern.split(".").length
+    if (segments > bestSegments) {
+      bestSegments = segments
+      best = pattern
+    }
+  }
+  if (best !== undefined) return best
+  return map["*"] !== undefined ? "*" : undefined
+}
+
+/**
+ * Merge the matched event override (and its wildcard default) into a base
+ * config. Called instead of {@link configForEvent} when wildcard patterns are
+ * present; `configForEvent` already handles exact-name lookups.
+ */
+export const overrideForEvent = (
+  config: ResolvedConfig,
+  event: string,
+): { config: ResolvedConfig; body?: Record<string, unknown> } => {
+  const body = eventBodiesFor(config, event)
+  const cfg = configForEvent(config, event)
+  return { config: body ? { ...cfg, body } : cfg, ...(body ? { body } : {}) }
+}
+
+/** Find the matched per-event body template for a concrete event type. */
+export const eventBodiesFor = (
+  config: ResolvedConfig,
+  event: string,
+): Record<string, unknown> | undefined => {
+  const key = matchKey(config.eventBodies, event)
+  return key !== undefined ? config.eventBodies[key] : undefined
+}
+
+/** Find the matched per-event payload template for a concrete event type. */
+export const payloadFor = (
+  config: ResolvedConfig,
+  event: string,
+): Record<string, unknown> | undefined => {
+  const key = matchKey(config.payloads, event)
+  return key !== undefined ? config.payloads[key] : undefined
+}
+
+/** Find the matched per-event override for a concrete event type. */
+export const eventOverride = (
+  config: ResolvedConfig,
+  event: string,
+): EventOverride | undefined => {
+  const key = matchKey(config.events, event)
+  return key !== undefined ? config.events[key] : undefined
+}
+
+/** Whether a concrete event passes the configured notifyOn filters. */
+export const passesNotifyOn = (notifyOn: readonly string[], event: string): boolean =>
+  notifyOn.some((pattern) => globMatch(pattern, event))
 
 const ENV_PREFIX = "OPENCODE_NOTIFY_"
 
@@ -409,11 +532,11 @@ export interface ResolvedConfig extends Required<Omit<HttpNotifierConfig,
   retryBackoffMs?: number
   onRequest?: (outcome: RequestOutcome) => void
   onNotify?: (notification: NotificationPayload) => void
-  events: Partial<Record<NotifyEvent, EventOverride>>
+  events: Record<string, EventOverride>
   /** Per-event payload templates, expanded alongside `events`. */
-  payloads: Partial<Record<NotifyEvent, Record<string, unknown>>>
+  payloads: Record<string, Record<string, unknown>>
   /** Per-event templates that came from `events.<name>.body`. */
-  eventBodies: Partial<Record<NotifyEvent, Record<string, unknown>>>
+  eventBodies: Record<string, Record<string, unknown>>
 }
 
 const SERIALIZERS = ["json", "form", "none", "query"] as const
@@ -467,15 +590,16 @@ export const resolveConfig = (
     if (value !== undefined) merged[key] = value
   }
 
-  const notifyOn = parseEvents(merged.notifyOn) ?? DEFAULT_EVENTS
+  const notifyOn = parsePatterns(merged.notifyOn) ?? DEFAULT_EVENTS
   const eventOverridesInput = record(merged.events) ?? {}
-  const events: Partial<Record<NotifyEvent, EventOverride>> = {}
-  const eventBodies: Partial<Record<NotifyEvent, Record<string, unknown>>> = {}
-  const payloads: Partial<Record<NotifyEvent, Record<string, unknown>>> = {}
+  const events: Record<string, EventOverride> = {}
+  const eventBodies: Record<string, Record<string, unknown>> = {}
+  const payloads: Record<string, Record<string, unknown>> = {}
   for (const [key, value] of Object.entries(eventOverridesInput)) {
-    const [event] = parseEvents(key) ?? []
     const entry = record(value)
-    if (!event || !entry) continue
+    if (!entry) continue
+    const pattern = patternKey(key)
+    if (!pattern) continue
     const normalized: EventOverride = {}
     for (const field of Object.keys(entry) as Array<keyof EventOverride>) {
       if (field === "body") continue
@@ -498,16 +622,16 @@ export const resolveConfig = (
         if (text !== undefined) (normalized as Record<string, unknown>)[field] = field === "json" ? bool(entry[field], true) : text
       }
     }
-    if (Object.keys(normalized).length > 0) events[event] = normalized
+    if (Object.keys(normalized).length > 0) events[pattern] = normalized
     const body = record(entry.body)
-    if (body) eventBodies[event] = body
+    if (body) eventBodies[pattern] = body
   }
 
   const explicitPayloads = record(merged.payloads) ?? {}
   for (const [key, value] of Object.entries(explicitPayloads)) {
-    const [event] = parseEvents(key) ?? []
     const body = record(value)
-    if (event && body) payloads[event] = body
+    const pattern = patternKey(key)
+    if (pattern && body) payloads[pattern] = body
   }
 
   const maxQueue = Math.max(0, Math.floor(num(merged.maxQueue) ?? 100))
@@ -552,8 +676,9 @@ export const resolveConfig = (
 }
 
 /** Merge one event's overrides over one event's mapping. */
-export const configForEvent = (config: ResolvedConfig, event: NotifyEvent): ResolvedConfig => {
-  const override = config.events[event]
+export const configForEvent = (config: ResolvedConfig, event: string): ResolvedConfig => {
+  const key = matchKey(config.events, event)
+  const override = key !== undefined ? config.events[key] : undefined
   if (!override) return config
   const http = mergeHttp(config.http, override.http ?? {})
   const method = string(override.method)?.toUpperCase() ?? config.method

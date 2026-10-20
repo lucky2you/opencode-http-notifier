@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 
-import { resolveConfig, parseEvents, configForEvent } from "../dist/config.js"
+import { resolveConfig, parseEvents, configForEvent, globMatch, eventBodiesFor } from "../dist/config.js"
 import { normalizeEvent } from "../dist/events.js"
 import { buildPayload, planRequest, renderTemplate } from "../dist/http.js"
 import { Notifier } from "../dist/notifier.js"
@@ -90,7 +90,7 @@ describe("config resolution", () => {
     assert.equal(config.timeoutMs, 5000)
     assert.equal(config.retries, 3)
     assert.equal(config.concurrency, 3)
-    assert.ok(config.notifyOn.includes("session.idle"))
+    assert.ok(config.notifyOn.includes("session.*"), "default scope is all session events")
     assert.ok(!config.notifyOn.includes("session.compacted"))
   })
 
@@ -131,6 +131,36 @@ describe("config resolution", () => {
     assert.equal(config.retries, 1)
     assert.equal(config.maxQueue, 100)
     assert.equal(config.logLevel, "warn")
+  })
+
+  test("notifyOn accepts wildcards and catches everything with *", () => {
+    const sessionOnly = resolveConfig({ notifyOn: ["session.*"] }, {})
+    assert.ok(sessionOnly.notifyOn.some((e) => e === "session.*"))
+    const match = (cfg: typeof sessionOnly, type: string) =>
+      cfg.notifyOn.some((pattern) => globMatch(pattern, type))
+    assert.ok(match(sessionOnly, "session.execution.started"))
+    assert.ok(match(sessionOnly, "session.idle"))
+    assert.ok(!match(sessionOnly, "file.edited"))
+    const all = resolveConfig({ notifyOn: ["*"] }, {})
+    assert.ok(all.notifyOn.some((e) => e === "*"))
+    assert.ok(all.notifyOn.some((pattern) => globMatch(pattern, "file.edited")))
+  })
+
+  test("events keys accept wildcards and exact beats wildcard beats star", () => {
+    const config = resolveConfig(
+      {
+        payload: "custom",
+        events: {
+          "session.execution.succeeded": { body: { s: "exact" } },
+          "session.*": { body: { s: "wild" } },
+          "*": { body: { s: "star" } },
+        },
+      },
+      {},
+    )
+    assert.deepEqual(eventBodiesFor(config, "session.execution.succeeded"), { s: "exact" }, "exact type wins")
+    assert.deepEqual(eventBodiesFor(config, "session.execution.started"), { s: "wild" }, "wildcard beats star")
+    assert.deepEqual(eventBodiesFor(config, "file.edited"), { s: "star" }, "star is the catch-all fallback")
   })
 
   test("event names accept aliases and comma separated lists", () => {
@@ -189,17 +219,18 @@ describe("event normalisation across API versions", () => {
     assert.equal(v2?.directory, "/repo")
   })
 
-  test("V1 session.status maps to busy, retry and idle", () => {
-    assert.equal(normalizeEvent(v1Status({ type: "busy" }), { apiVersion: 1 })?.event, "session.busy")
+  test("V1 session.status keeps its raw type with a derived state hint", () => {
+    assert.equal(normalizeEvent(v1Status({ type: "busy" }), { apiVersion: 1 })?.event, "session.status")
     assert.equal(normalizeEvent(v1Status({ type: "busy" }), { apiVersion: 1 })?.state, "busy")
     const retry = normalizeEvent(
       v1Status({ type: "retry", attempt: 2, message: "overloaded", next: 1 }),
       { apiVersion: 1 },
     )
-    assert.equal(retry?.event, "session.retry")
+    assert.equal(retry?.event, "session.status")
     assert.equal(retry?.state, "retry")
     assert.equal(retry?.message, "overloaded")
-    assert.equal(normalizeEvent(v1Status({ type: "idle" }), { apiVersion: 1 })?.event, "session.idle")
+    assert.equal(normalizeEvent(v1Status({ type: "idle" }), { apiVersion: 1 })?.event, "session.status")
+    assert.equal(normalizeEvent(v1Status({ type: "idle" }), { apiVersion: 1 })?.state, "idle")
   })
 
   test("V1 session.error carries the provider message", () => {
@@ -209,19 +240,21 @@ describe("event normalisation across API versions", () => {
     assert.equal(event?.message, "provider exploded")
   })
 
-  test("V2 execution lifecycle events map onto the same states", () => {
-    assert.equal(normalizeEvent(v2Status({ type: "busy" }), { apiVersion: 2 })?.event, "session.busy")
+  test("V2 execution lifecycle events keep distinct raw types", () => {
+    assert.equal(normalizeEvent(v2Status({ type: "busy" }), { apiVersion: 2 })?.event, "session.status")
+    assert.equal(normalizeEvent(v2Status({ type: "busy" }), { apiVersion: 2 })?.state, "busy")
+    assert.equal(normalizeEvent({ type: "session.execution.started", data: { sessionID: "s" } }, { apiVersion: 2 })?.event, "session.execution.started")
     assert.equal(normalizeEvent({ type: "session.execution.started", data: { sessionID: "s" } }, { apiVersion: 2 })?.state, "busy")
-    assert.equal(normalizeEvent({ type: "session.execution.succeeded", data: { sessionID: "s" } }, { apiVersion: 2 })?.event, "session.idle")
+    assert.equal(normalizeEvent({ type: "session.execution.succeeded", data: { sessionID: "s" } }, { apiVersion: 2 })?.event, "session.execution.succeeded")
     const failed = normalizeEvent(v2Failed(), { apiVersion: 2 })
-    assert.equal(failed?.event, "session.error")
+    assert.equal(failed?.event, "session.execution.failed")
     assert.equal(failed?.state, "error")
     assert.equal(failed?.message, "rate limited")
     const retry = normalizeEvent({ type: "session.retry.scheduled", data: { sessionID: "s", message: "again" } }, { apiVersion: 2 })
-    assert.equal(retry?.event, "session.retry")
+    assert.equal(retry?.event, "session.retry.scheduled")
   })
 
-  test("permissions map to permission.asked, including the V1 name", () => {
+  test("permissions keep their raw type and carry the ask message", () => {
     const v2 = normalizeEvent(
       { type: "permission.asked", data: { id: "per_1", sessionID: "ses_1", action: "bash", resources: ["rm -rf"] } },
       { apiVersion: 2 },
@@ -232,7 +265,7 @@ describe("event normalisation across API versions", () => {
       { type: "permission.updated", properties: { id: "per_1", sessionID: "ses_1", title: "Run bash?" } },
       { apiVersion: 1 },
     )
-    assert.equal(v1?.event, "permission.asked")
+    assert.equal(v1?.event, "permission.updated", "raw type is preserved, not collapsed to permission.asked")
     assert.equal(v1?.message, "Run bash?")
   })
 
@@ -253,6 +286,24 @@ describe("event normalisation across API versions", () => {
     assert.equal(normalizeEvent({ properties: {} }, { apiVersion: 1 }), undefined)
     assert.equal(normalizeEvent(null, { apiVersion: 2 }), undefined)
     assert.equal(normalizeEvent("nope", { apiVersion: 2 }), undefined)
+  })
+
+  test("distinct raw events are not collapsed (no normalization of identity)", () => {
+    const waiting = normalizeEvent({ type: "session.idle", data: { sessionID: "s1" } }, { apiVersion: 2 })
+    const finished = normalizeEvent({ type: "session.execution.succeeded", data: { sessionID: "s1" } }, { apiVersion: 2 })
+    assert.equal(waiting?.event, "session.idle", "waiting for input keeps its raw type")
+    assert.equal(finished?.event, "session.execution.succeeded", "task finished keeps its raw type")
+    assert.notEqual(waiting?.event, finished?.event, "the two are distinct and individually matchable")
+    assert.equal(finished?.state, "idle", "state remains a derived hint for the HTTP machine")
+  })
+
+  test("execution lifecycle events keep their raw type identity", () => {
+    assert.equal(normalizeEvent({ type: "session.execution.started", data: { sessionID: "s" } }, { apiVersion: 2 })?.event, "session.execution.started")
+    assert.equal(normalizeEvent({ type: "session.execution.started", data: { sessionID: "s" } }, { apiVersion: 2 })?.state, "busy")
+    assert.equal(normalizeEvent(v2Failed(), { apiVersion: 2 })?.event, "session.execution.failed")
+    assert.equal(normalizeEvent(v2Failed(), { apiVersion: 2 })?.state, "error")
+    assert.equal(normalizeEvent({ type: "session.retry.scheduled", data: { sessionID: "s" } }, { apiVersion: 2 })?.event, "session.retry.scheduled")
+    assert.equal(normalizeEvent({ type: "session.retry.scheduled", data: { sessionID: "s" } }, { apiVersion: 2 })?.state, "retry")
   })
 })
 
@@ -582,7 +633,7 @@ describe("delivery over a real HTTP server", () => {
     notifier.close()
 
     const types = requests.map((request) => JSON.parse(request.body).type)
-    assert.deepEqual(types, ["session.busy", "session.idle"])
+    assert.deepEqual(types, ["session.status", "session.idle"])
   })
 
   test("emitRepeatedStates defaults to true so every change is reported", async () => {
@@ -664,9 +715,12 @@ describe("delivery over a real HTTP server", () => {
     }
   })
 
-  test("a status-dot mapping sends one stable app_id per session over HTTP", async () => {
-    // Mirrors the PixelClock `/status` contract: each session maps to a stable,
-    // URL-safe short `app_id`, and repeated events for it share that id.
+  test("a distinct raw-lifecycle mapping sends one stable app_id per session", async () => {
+    // Mirrors the PixelClock `/status` contract with the new no-normalisation
+    // model: "waiting for input" (session.idle) and "task finished"
+    // (session.execution.succeeded) are separate config keys styled differently,
+    // a wildcard supplies the default, and each session maps to a stable short
+    // app_id.
     const config = {
       url,
       payload: "custom" as const,
@@ -674,28 +728,30 @@ describe("delivery over a real HTTP server", () => {
       debounceMs: 0,
       timeoutMs: 2000,
       events: {
-        "session.busy": { body: { app_id: "{sessionKey}", active: true, color: "amber", timeout: 600000 } },
-        "session.idle": { body: { app_id: "{sessionKey}", active: true, color: "green", timeout: 600000 } },
+        "session.execution.started": { body: { app_id: "{sessionKey}", color: "amber", timeout: 600000 } },
+        "session.execution.succeeded": { body: { app_id: "{sessionKey}", color: "green", timeout: 600000 } },
+        "session.idle": { body: { app_id: "{sessionKey}", color: "blue", timeout: 600000 } },
+        "session.*": { body: { app_id: "{sessionKey}", color: "white", timeout: 600000 } },
       },
     }
-    const notifier = makeNotifier(config, 1)
-    notifier.notify(v1Status({ type: "busy" }, "ses_myrun"))
-    // Same session emitting busy again (state unchanged) must not fire a second request.
-    notifier.notify(v1Status({ type: "busy" }, "ses_myrun"))
-    notifier.notify(v1Idle("ses_myrun"))
+    const notifier = makeNotifier(config, 2)
+    notifier.notify({ type: "session.execution.started", data: { sessionID: "ses_run" } })
+    notifier.notify({ type: "session.execution.succeeded", data: { sessionID: "ses_run" } })
+    notifier.notify({ type: "session.idle", data: { sessionID: "ses_run" } })
     await notifier.flush()
     notifier.close()
 
-    assert.equal(requests.length, 2, "busy then idle only")
+    assert.equal(requests.length, 3, "started, finished and waiting each send once")
     const bodies = requests.map((r) => JSON.parse(r.body))
     assert.deepEqual(
       bodies.map((b) => b.app_id),
-      [bodies[0].app_id, bodies[0].app_id],
+      [bodies[0].app_id, bodies[0].app_id, bodies[0].app_id],
       "one stable app_id per session",
     )
     assert.ok(bodies[0].app_id.length <= 16)
     assert.match(bodies[0].app_id, /^[A-Za-z0-9_-]+$/)
-    assert.equal(bodies[1].color, "green")
+    assert.equal(bodies[1].color, "green", "task finished is green")
+    assert.equal(bodies[2].color, "blue", "waiting for input is blue")
   })
 })
 
@@ -742,7 +798,7 @@ describe("plugin entrypoints", () => {
     await cleanup()
     assert.equal(stopped, true)
     assert.equal((notified as Array<{ type: string }>)[0]?.type, "session.idle")
-    assert.equal((notified as Array<{ type: string }>)[1]?.type, "session.busy")
+    assert.equal((notified as Array<{ type: string }>)[1]?.type, "session.status")
   })
 
   test("the default export carries both entrypoints", async () => {

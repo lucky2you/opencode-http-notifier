@@ -72,20 +72,12 @@ For project-local plugins you can also drop the package under `.opencode/plugins
 
 ## What gets sent
 
-By default the notifier reports these events:
+The notifier does **not** normalise event identity: every raw OpenCode event
+type is preserved and individually matchable. OpenCode emits a range of
+lifecycle events; which ones reach your endpoint is controlled by `notifyOn`.
 
-| Event | When |
-| --- | --- |
-| `session.created` | A session starts |
-| `session.busy` | A model request begins |
-| `session.idle` | The session finished and is waiting for you |
-| `session.retry` | A provider request is being retried |
-| `session.error` | A turn failed |
-| `permission.asked` | OpenCode needs permission |
-| `permission.replied` | A permission request was answered |
-| `session.compacted` | Context was compacted (off by default) |
-
-All of them share one normalised envelope, regardless of the OpenCode version:
+The default scope is `["session.*"]` — every `session.*` event. All share one
+envelope, regardless of the OpenCode version:
 
 ```json
 {
@@ -100,6 +92,32 @@ All of them share one normalised envelope, regardless of the OpenCode version:
   "hostname": "my-laptop"
 }
 ```
+
+The `type` field is the raw provider event name. Two events that used to be
+collapsed are now distinct, so you can style them differently:
+
+| Raw event | Meaning |
+| --- | --- |
+| `session.execution.succeeded` | The task finished successfully |
+| `session.idle` | The session is now waiting for your input |
+| `session.execution.failed` | The task failed |
+| `session.retry.scheduled` | A provider request is being retried |
+| `permission.asked` | OpenCode needs your permission |
+
+The `sessionState` field and the `http` verb/status machine still map onto a
+derived `idle`/`busy`/`retry`/`error` hint, but display/routing is by raw type.
+
+### Matching events with wildcards
+
+`notifyOn` and the `events` keys accept glob patterns:
+
+- an exact name (`session.idle`),
+- a dotted-prefix wildcard (`session.*`),
+- the catch-all (`*`).
+
+When several patterns could match one event, resolution is **exact name >
+more-specific wildcard > `*`**. A `session.*` key (or `*`) supplies a default so
+you don't have to enumerate every event.
 
 ## Configuration
 
