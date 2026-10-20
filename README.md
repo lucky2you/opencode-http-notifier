@@ -136,16 +136,22 @@ envelope, regardless of the OpenCode version:
 }
 ```
 
-The `type` field is the raw provider event name. Two events that used to be
-collapsed are now distinct, so you can style them differently:
+The `type` field is the raw provider event name. Events are individually styleable:
 
 | Raw event | Meaning |
 | --- | --- |
-| `session.execution.succeeded` | The task finished successfully |
-| `session.idle` | The session is now waiting for your input |
+| `session.step.started` | A model step is running (busy) |
+| `session.execution.succeeded` | A turn finished (OpenCode V2 = waiting for input) |
 | `session.execution.failed` | The task failed |
 | `session.retry.scheduled` | A provider request is being retried |
-| `permission.asked` | OpenCode needs your permission |
+| `session.permission.*` | OpenCode needs your permission |
+
+> **V1 vs V2: what means "waiting for input".** V1 emits a distinct `session.idle`
+> when the session waits for input. **OpenCode V2 does not** — it emits
+> `session.execution.succeeded` (after `session.step.ended`) at the end of every
+> turn, which is both "task finished" and "waiting for your next input." Style
+> that single signal accordingly (e.g. amber + `blink_hz` on a status dot). The
+> `session.idle` key is still honoured for V1.
 
 The `sessionState` field and the `http` verb/status machine still map onto a
 derived `idle`/`busy`/`retry`/`error` hint, but display/routing is by raw type.
