@@ -2,6 +2,8 @@
 
 Notify a remote HTTP endpoint whenever OpenCode's status changes.
 
+- **Source code / issues:** <https://github.com/lucky2you/opencode-http-notifier>
+
 Works with **both plugin APIs** from a single package:
 
 | | V1 | V2 |
@@ -18,9 +20,50 @@ against `@opencode-ai/plugin` and `@opencode/plugin`.
 
 ## Install
 
+You can install from npm, or directly from this repository.
+
+### From npm
+
 ```sh
 npm install opencode-http-notifier
 ```
+
+### From the repository (GitHub)
+
+To install straight from `https://github.com/lucky2you/opencode-http-notifier`, use
+a git install. npm supports both shorthand and full-URL forms:
+
+```sh
+# git+ssh (requires an SSH key configured for GitHub)
+npm install git+ssh://git@github.com/lucky2you/opencode-http-notifier.git
+
+# Explicit, HTTPS (works without an SSH key configured)
+npm install https://github.com/lucky2you/opencode-http-notifier.git
+
+# npm's GitHub shorthand (default branch)
+npm install github:lucky2you/opencode-http-notifier
+
+# Pin to a tag / commit
+npm install github:lucky2you/opencode-http-notifier#v1.2.0
+```
+
+> The repository does not commit `dist/`, but it ships a `prepare` script that
+> runs `npm run build` automatically, so installing from git compiles the package
+> on your machine before OpenCode loads it. If you ever need to build by hand,
+> see [Development][dev].
+
+For OpenCode specifically, set the `package` field in your config to the URL, so
+OpenCode (which delegates to npm) installs and resolves it:
+
+```jsonc
+{
+  "plugins": [
+    { "package": "github:lucky2you/opencode-http-notifier" }
+  ]
+}
+```
+
+[dev]: #development
 
 ### V2 (`plugins`)
 
@@ -333,7 +376,7 @@ config for custom logging or metrics.
 npm install
 npm run typecheck   # includes compile-time V1 + V2 contract checks
 npm run build
-npm test            # 51 tests, including a real local HTTP server
+npm test            # 52 tests, including a real local HTTP server
 ```
 
 ## License
