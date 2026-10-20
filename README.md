@@ -333,7 +333,7 @@ config for custom logging or metrics.
 npm install
 npm run typecheck   # includes compile-time V1 + V2 contract checks
 npm run build
-npm test            # 47 tests, including a real local HTTP server
+npm test            # 51 tests, including a real local HTTP server
 ```
 
 ## License
