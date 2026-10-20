@@ -73,6 +73,21 @@ export interface HttpMapping {
   body?: string
 }
 
+/**
+ * Cleanup-on-close configuration. When `onClose` is set, the notifier tracks
+ * the value of `field` in every custom body it delivers and, on `close()`,
+ * sends one `remove` request per distinct value. `{key}` in `remove` is
+ * replaced with the tracked value.
+ */
+export interface CleanupConfig {
+  onClose?: {
+    /** Dot-path to the identity field in the rendered custom body (e.g. `app_id`). */
+    field: string
+    /** JSON body template for the removal request; `{key}` is the field value. */
+    remove: Record<string, unknown>
+  }
+}
+
 export interface HttpNotifierConfig {
   /** Master switch. @default true */
   enabled?: boolean
@@ -135,15 +150,19 @@ export interface HttpNotifierConfig {
   /** Per-event overrides, merged over the base configuration. */
   events?: Partial<Record<NotifyEvent, EventOverride>>
   /**
-   * Event names to notify. Defaults to every event except `session.compacted`.
-   * A per-event `enabled: false` disables a single event.
-   */
-  /**
    * Event glob patterns to notify. Each may be an exact event type (e.g.
    * `session.idle`), a dotted-prefix wildcard (`session.*`), or the catch-all
    * `*`. Defaults to every curated event except `session.compacted`.
    */
   notifyOn?: string[]
+  /**
+   * Cleanup-on-close behaviour. When configured, the notifier remembers every
+   * rendered custom body it delivers, and on `close()` sends a removal request
+   * for each distinct value of `field` found in those bodies. This lets an
+   * instance tear down its own device widgets (e.g. a PixelClock status dot)
+   * when opencode stops gracefully.
+   */
+  cleanup?: CleanupConfig
   /**
    * Debounce identical events for the same session, in milliseconds.
    * @default 500
@@ -515,7 +534,7 @@ export const readEnvConfig = (env: Record<string, string | undefined>): Record<s
 }
 
 export interface ResolvedConfig extends Required<Omit<HttpNotifierConfig,
-  "url" | "auth" | "authEnv" | "headersEnv" | "body" | "bodyEnv" | "onRequest" | "onNotify" | "retryBackoffMs" | "events" | "method">> {
+  "url" | "auth" | "authEnv" | "headersEnv" | "body" | "bodyEnv" | "onRequest" | "onNotify" | "retryBackoffMs" | "events" | "method" | "cleanup">> {
   /** Defaults to POST. */
   method: string
   /**
@@ -537,6 +556,7 @@ export interface ResolvedConfig extends Required<Omit<HttpNotifierConfig,
   payloads: Record<string, Record<string, unknown>>
   /** Per-event templates that came from `events.<name>.body`. */
   eventBodies: Record<string, Record<string, unknown>>
+  cleanup?: CleanupConfig
 }
 
 const SERIALIZERS = ["json", "form", "none", "query"] as const
@@ -575,6 +595,17 @@ const mergeHttp = (base: HttpMapping, override: HttpMapping): HttpMapping => ({
   ...override,
   urls: { ...(base.urls ?? {}), ...(override.urls ?? {}) },
 })
+
+const normalizeCleanup = (value: unknown): CleanupConfig | undefined => {
+  const source = record(value)
+  if (!source) return undefined
+  const onClose = record(source.onClose)
+  if (!onClose) return undefined
+  const field = string(onClose.field)
+  const remove = record(onClose.remove)
+  if (!field || !remove) return undefined
+  return { onClose: { field, remove } }
+}
 
 /**
  * Merge plugin options over environment variables over defaults and validate
@@ -670,6 +701,7 @@ export const resolveConfig = (
     concurrency,
     successStatus: Math.max(100, num(merged.successStatus) ?? 400),
     logLevel: oneOf(merged.logLevel, LOG_LEVELS, "warn"),
+    cleanup: normalizeCleanup(merged.cleanup),
     onRequest: typeof merged.onRequest === "function" ? (merged.onRequest as ResolvedConfig["onRequest"]) : undefined,
     onNotify: typeof merged.onNotify === "function" ? (merged.onNotify as ResolvedConfig["onNotify"]) : undefined,
   }

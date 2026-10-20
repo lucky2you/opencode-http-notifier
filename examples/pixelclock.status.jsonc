@@ -35,6 +35,17 @@
   // you want permission events etc. included.
   "notifyOn": ["session.*"],
 
+  // When opencode stops gracefully, remove every status dot this instance lit:
+  // send `active:false` for each distinct `app_id` we posted to. (A hard kill of
+  // the process can't run this — those dots persist until the device clears
+  // them or they're overwritten.)
+  "cleanup": {
+    "onClose": {
+      "field": "app_id",
+      "remove": { "app_id": "{key}", "active": false }
+    }
+  },
+
   // Busy / retrying / starting states must NOT disappear on a long timeout, so
   // they use `timeout: 0` = resident until a new request overwrites or removes
   // the dot. Only `session.idle` (waiting for input) uses a finite `timeout`

@@ -753,6 +753,47 @@ describe("delivery over a real HTTP server", () => {
     assert.equal(bodies[1].color, "green", "task finished is green")
     assert.equal(bodies[2].color, "blue", "waiting for input is blue")
   })
+
+  test("close() removes every app_id it lit before (cleanup.onClose)", async () => {
+    // On normal shutdown the plugin must send active:false for each distinct
+    // app_id it lit, so a stopped opencode clears its own dots, not just wait
+    // for the device timeout.
+    const config = {
+      url,
+      payload: "custom" as const,
+      emitRepeatedStates: false as const,
+      debounceMs: 0,
+      timeoutMs: 2000,
+      cleanup: {
+        onClose: {
+          field: "app_id",
+          remove: { app_id: "{key}", active: false },
+        },
+      },
+      events: {
+        "session.execution.started": { body: { app_id: "{sessionKey}", color: "amber" } },
+        "session.execution.succeeded": { body: { app_id: "{sessionKey}", color: "green" } },
+      },
+    }
+    const notifier = makeNotifier(config, 2)
+    notifier.notify({ type: "session.execution.started", data: { sessionID: "ses_a" } })
+    notifier.notify({ type: "session.execution.started", data: { sessionID: "ses_b" } })
+    await notifier.flush()
+    const litCount = requests.length
+    await notifier.close()
+    // close() already awaited its cleanup sends; nothing should be left queued.
+    assert.equal(requests.length - litCount, 2, "close() sent both removals")
+
+    // Two distinct sessions lit two app_ids, so close() must send two removals.
+    const removals = requests.filter((r) => JSON.parse(r.body).active === false)
+    assert.equal(litCount, 2, "both sessions lit a dot")
+    assert.equal(removals.length, 2, "close() removes both lit app_ids")
+    for (const removal of removals) {
+      const body = JSON.parse(removal.body)
+      assert.equal(body.active, false)
+      assert.match(String(body.app_id), /^[A-Za-z0-9_-]{1,16}$/)
+    }
+  })
 })
 
 describe("plugin entrypoints", () => {
